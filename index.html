@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#080d1c">
+<title>Motion Fighter 3D</title>
+<style>
+:root{--bg:#080d1c;--panel:#121b31;--cyan:#43e6ff;--pink:#ff4f87;--gold:#ffd166;--white:#f4f7ff}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--white);font-family:system-ui,Arial,sans-serif}
+#game{position:fixed;inset:0}canvas{display:block}
+#hud{position:fixed;inset:0;pointer-events:none;padding:12px;display:flex;flex-direction:column;justify-content:space-between}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.panel{background:#0b1325d9;border:1px solid #ffffff20;border-radius:14px;padding:9px 11px;backdrop-filter:blur(8px);min-width:35%}
+.name{font-size:12px;font-weight:800;letter-spacing:1px;margin-bottom:6px}.bar{height:11px;border-radius:20px;background:#29334b;overflow:hidden}.fill{height:100%;width:100%;transition:width .2s;background:linear-gradient(90deg,#20d7ad,#a2ff72)}
+.enemy .fill{background:linear-gradient(90deg,#ff477e,#ff9a62)}
+#status{align-self:center;background:#0b1325d9;border:1px solid #ffffff22;border-radius:999px;padding:7px 14px;font-size:12px;font-weight:700}
+.bottom{display:flex;justify-content:space-between;align-items:end;gap:8px}
+#camBox{width:112px;height:84px;border-radius:12px;overflow:hidden;border:1px solid #43e6ff88;background:#101a2e;position:relative}
+#cam{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+#camLabel{position:absolute;left:5px;bottom:4px;font-size:9px;background:#0009;padding:2px 5px;border-radius:5px}
+#controls{display:flex;gap:7px;pointer-events:auto}
+button{border:1px solid #ffffff30;border-radius:12px;padding:11px 13px;background:#172541;color:white;font-weight:800;font-size:12px}
+button.primary{background:linear-gradient(135deg,#00bcd4,#376bff);border:0}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(ellipse at top,#172d50,#070b16 70%);z-index:5}
+.card{width:min(460px,100%);background:#101a30;border:1px solid #ffffff20;border-radius:22px;padding:22px;box-shadow:0 20px 70px #0009}
+h1{font-size:29px;line-height:1;margin:0 0 8px;letter-spacing:-1px}h1 span{color:var(--cyan)}
+p{color:#c4cee2;font-size:14px;line-height:1.5}
+ul{padding-left:20px;color:#dce5f6;font-size:13px;line-height:1.8}
+.note{font-size:11px;color:#9eacc7}
+#message{font-size:12px;color:#a8bad9;min-height:18px;margin-top:9px}
+#toast{position:fixed;left:50%;top:23%;transform:translateX(-50%);background:#07101fe8;border:1px solid #ffffff30;border-radius:30px;padding:9px 16px;font-weight:900;opacity:0;transition:opacity .15s;pointer-events:none}
+@media(max-width:420px){.panel{min-width:39%;padding:7px 8px}.name{font-size:10px}#camBox{width:92px;height:70px}button{padding:10px;font-size:11px}}
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="hud">
+ <div class="top">
+  <div class="panel"><div class="name">YOU · MOTION FIGHTER</div><div class="bar"><div id="pHealth" class="fill"></div></div></div>
+  <div id="status">ROUND 1 · READY</div>
+  <div class="panel enemy"><div class="name">TRAINING BOT</div><div class="bar"><div id="eHealth" class="fill"></div></div></div>
+ </div>
+ <div class="bottom">
+  <div id="camBox"><video id="cam" playsinline muted></video><div id="camLabel">CAMERA OFF</div></div>
+  <div id="controls">
+   <button id="pause">PAUSE</button><button id="reset">RESET</button>
+  </div>
+ </div>
+</div>
+<div id="toast"></div>
+<div id="overlay">
+ <div class="card">
+  <h1>MOTION <span>FIGHTER</span></h1>
+  <p>A camera-controlled 3D training battle. Move in front of your phone and your fighter responds to your gestures.</p>
+  <ul>
+   <li>Quick left / right arm extension → punch</li>
+   <li>Both hands raised → block</li>
+   <li>Lower your body → dodge</li>
+   <li>Lift a knee → kick</li>
+   <li>Lean or step sideways → move left / right</li>
+  </ul>
+  <button class="primary" id="start" style="width:100%;padding:14px">START CAMERA GAME</button>
+  <div id="message">Camera permission is needed. Use a secure HTTPS page in your browser.</div>
+  <p class="note">Safety: keep the phone stable, stand far enough back to stay in frame, and use gentle air movements only. This demo processes pose data in your browser.</p>
+ </div>
+</div>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import {PoseLandmarker, FilesetResolver} from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+
+const mount=document.querySelector('#game');
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x080d1c); scene.fog=new THREE.Fog(0x080d1c,13,28);
+const camera=new THREE.PerspectiveCamera(48,innerWidth/innerHeight,.1,100); camera.position.set(0,5.3,12.5); camera.lookAt(0,1.3,0);
+const renderer=new THREE.WebGLRenderer({antialias:true}); renderer.setPixelRatio(Math.min(devicePixelRatio,1.6)); renderer.setSize(innerWidth,innerHeight); renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap; mount.appendChild(renderer.domElement);
+scene.add(new THREE.HemisphereLight(0x9bdcff,0x172038,2));
+const key=new THREE.DirectionalLight(0xffffff,2.4); key.position.set(-4,9,7); key.castShadow=true; scene.add(key);
+const floor=new THREE.Mesh(new THREE.CircleGeometry(7,64),new THREE.MeshStandardMaterial({color:0x182747,roughness:.8})); floor.rotation.x=-Math.PI/2; floor.position.y=-.04; floor.receiveShadow=true; scene.add(floor);
+const ring=new THREE.Mesh(new THREE.TorusGeometry(5.1,.055,8,100),new THREE.MeshBasicMaterial({color:0x27dff2})); ring.rotation.x=Math.PI/2; ring.position.y=.02; scene.add(ring);
+for(let i=0;i<24;i++){let a=i/24*Math.PI*2;let pillar=new THREE.Mesh(new THREE.BoxGeometry(.18,2.4,.18),new THREE.MeshStandardMaterial({color:i%2?0x24416d:0x174e68,emissive:0x071b31}));pillar.position.set(Math.cos(a)*6,1.2,Math.sin(a)*6);scene.add(pillar)}
+function makeFighter(color,accent,x,z){
+ const root=new THREE.Group(); root.position.set(x,0,z); scene.add(root);
+ const mat=new THREE.MeshStandardMaterial({color,roughness:.55,metalness:.12});
+ const glow=new THREE.MeshStandardMaterial({color:accent,emissive:accent,emissiveIntensity:.35});
+ function ball(parent,r,pos,material=mat){let m=new THREE.Mesh(new THREE.SphereGeometry(r,20,16),material);m.position.set(...pos);m.castShadow=true;parent.add(m);return m}
+ function limb(parent,a,b,r,material=mat){let v=new THREE.Vector3(...b).sub(new THREE.Vector3(...a));let m=new THREE.Mesh(new THREE.CylinderGeometry(r,r,v.length(),12),material);m.position.copy(new THREE.Vector3(...a).add(new THREE.Vector3(...b)).multiplyScalar(.5));m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),v.normalize());m.castShadow=true;parent.add(m);return m}
+ ball(root,.43,[0,1.55,0]); let torso=new THREE.Mesh(new THREE.CapsuleGeometry(.42,.7,6,12),mat);torso.position.y=1.05;torso.castShadow=true;root.add(torso);
+ ball(root,.29,[0,2.15,0],glow);
+ const arms=[],legs=[];
+ for(let s of [-1,1]){
+  let shoulder=[s*.43,1.55,0], elbow=[s*.72,1.2,.08], wrist=[s*.88,.92,.15];
+  let upper=limb(root,shoulder,elbow,.14);let fore=limb(root,elbow,wrist,.12);let fist=ball(root,.18,wrist,glow);arms.push({upper,fore,fist,side:s,shoulder});
+  let hip=[s*.22,.68,0],knee=[s*.27,.35,.03],foot=[s*.28,.12,.16];
+  legs.push({upper:limb(root,hip,knee,.17),lower:limb(root,knee,foot,.13),foot:ball(root,.17,foot,glow)});
+ }
+ return {root,arms,legs,baseX:x,attack:0,block:0,hit:0,walk:0};
+}
+const player=makeFighter(0x1d8cff,0x5df4ff,-1.5,1.0), enemy=makeFighter(0xff477e,0xffc15d,1.5,-1.0);
+enemy.root.rotation.y=Math.PI;
+const pHealth=document.querySelector('#pHealth'),eHealth=document.querySelector('#eHealth'),status=document.querySelector('#status'),toast=document.querySelector('#toast');
+let ph=100,eh=100,paused=false,lastGesture=0,lastLandmarks=null,poseTask=null,video=document.querySelector('#cam'),stream=null,active=false;
+function say(t){toast.textContent=t;toast.style.opacity=1;clearTimeout(say.timer);say.timer=setTimeout(()=>toast.style.opacity=0,650)}
+function updateBars(){pHealth.style.width=ph+'%';eHealth.style.width=eh+'%';status.textContent=eh<=0?'YOU WIN!':ph<=0?'TRY AGAIN':'ROUND 1 · '+(paused?'PAUSED':'FIGHT!')}
+function attack(which){if(!active||paused||eh<=0||ph<=0)return;player.attack=which;eh=Math.max(0,eh-(which==='kick'?13:8));updateBars();say(which==='kick'?'KICK!':'PUNCH!');}
+function block(){if(!active||paused)return;player.block=.8;say('BLOCK!')}
+function dodge(){if(!active||paused)return;player.root.position.y=.35;say('DODGE!')}
+function setMove(v){player.root.position.x=THREE.MathUtils.clamp(-1.5+v*1.6,-3.6,.3)}
+function moveLimb(obj,a,b){let va=new THREE.Vector3(...a),vb=new THREE.Vector3(...b),d=vb.clone().sub(va);obj.position.copy(va.add(vb).multiplyScalar(.5));obj.scale.y=d.length()/obj.geometry.parameters.height;obj.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),d.normalize())}
+function animate(){
+ requestAnimationFrame(animate);let t=performance.now()*.001;
+ if(!paused){
+  enemy.walk=Math.sin(t*2)*.08;enemy.root.position.x=1.5+Math.sin(t*.7)*.18;
+  if(Math.random()<.003&&eh>0&&ph>0){ph=Math.max(0,ph-4);player.hit=.3;updateBars();say('BOT ATTACK!')}
+ }
+ for(const f of [player,enemy]){
+  f.attack=Math.max(0,f.attack-.035);f.block=Math.max(0,f.block-.035);f.hit=Math.max(0,f.hit-.035);
+  f.root.position.y=Math.max(0,f.root.position.y-.025);
+  f.root.rotation.z=f.hit>0?Math.sin(t*45)*.12:0;
+  f.arms.forEach(a=>{let side=a.side;let lift=f.block>0?.5:0;let punch=f.attack>0?(a.side===-1?f.attack:0):0;let kick=f.attack>0?f.attack:0;
+   let shoulder=[side*.43,1.55,0],elbow=[side*(.72-punch*.35),1.2+lift,.08],wrist=[side*(.88-punch*.9),.92+lift+punch*.55,.15];
+   moveLimb(a.upper,shoulder,elbow);moveLimb(a.fore,elbow,wrist);a.fist.position.set(...wrist);
+  });
+  f.legs.forEach((l,i)=>{let s=i===0?-1:1;let hip=[s*.22,.68,0],knee=[s*.27,.35,0],foot=[s*.28,.12,.16];if(f.attack>0&&f===player&&i===0){knee=[-.3,.5,.3];foot=[-.2,.95,.7]}moveLimb(l.upper,hip,knee);moveLimb(l.lower,knee,foot);l.foot.position.set(...foot)});
+ }
+ renderer.render(scene,camera);
+}
+animate();
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+async function setupPose(){
+ const vision=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+ poseTask=await PoseLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',delegate:'GPU'},runningMode:'VIDEO',numPoses:1});
+}
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+function poseLoop(){
+ if(!active)return;
+ if(video.readyState>=2&&poseTask){
+  const now=performance.now();let result=poseTask.detectForVideo(video,now);
+  if(result.landmarks?.length){
+   const p=result.landmarks[0],L=p[15],R=p[16],LS=p[11],RS=p[12],LH=p[23],RH=p[24],LA=p[27],RA=p[28];
+   if([L,R,LS,RS,LH,RH,LA,RA].every(q=>q.visibility===undefined||q.visibility>.35)){
+    const cooldown=now-lastGesture>650;
+    const leftExt=dist(L,LS),rightExt=dist(R,RS);
+    const bothUp=L.y<LS.y-.10&&R.y<RS.y-.10;
+    const crouch=((LH.y+RH.y)/2)>((LS.y+RS.y)/2)*.72+.15;
+    const kneeUp=LA.y<LH.y-.17||RA.y<RH.y-.17;
+    if(cooldown){
+     if(bothUp){block();lastGesture=now}
+     else if(crouch){dodge();lastGesture=now}
+     else if(kneeUp){attack('kick');lastGesture=now}
+     else if(leftExt>.48){attack('punch');lastGesture=now}
+     else if(rightExt>.48){attack('punch');lastGesture=now}
+    }
+    let center=(LH.x+RH.x)/2;setMove((.5-center)*2);
+    document.querySelector('#camLabel').textContent='CAMERA ON · TRACKING';
+   }
+  }
+ }
+ requestAnimationFrame(poseLoop);
+}
+document.querySelector('#start').onclick=async()=>{
+ const msg=document.querySelector('#message'),btn=document.querySelector('#start');btn.disabled=true;msg.textContent='Starting camera and loading pose tracking…';
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false});
+  video.srcObject=stream;await video.play();await setupPose();
+  active=true;document.querySelector('#overlay').style.display='none';document.querySelector('#camLabel').textContent='CAMERA ON';poseLoop();
+ }catch(e){msg.textContent='Could not start camera/model: '+e.message+'. Open this page from HTTPS and allow camera permission.';btn.disabled=false}
+};
+document.querySelector('#pause').onclick=()=>{paused=!paused;document.querySelector('#pause').textContent=paused?'RESUME':'PAUSE';updateBars()};
+document.querySelector('#reset').onclick=()=>{ph=eh=100;player.root.position.set(-1.5,0,1);paused=false;updateBars();document.querySelector('#pause').textContent='PAUSE';say('ROUND RESET')};
+addEventListener('keydown',e=>{if(e.key==='j')attack('punch');if(e.key==='k')attack('kick');if(e.key==='l')block();if(e.key===' ')dodge();if(e.key==='ArrowLeft')setMove(-1);if(e.key==='ArrowRight')setMove(1)});
+</script>
+</body>
+</html>
